@@ -1,4 +1,5 @@
 import requests
+import time
 from collections import Counter
 from reactpy import component, html, hooks, run
 
@@ -12,64 +13,113 @@ cdn_1 = html.link(
 # Función de recomendación
 def recomendar_animes(usuario):
     if not usuario.strip():  # Verificar que el usuario no esté vacío
-        return {"animes": [{"title": "Por favor, ingresa un nombre de usuario válido.", "image_url": None}], "genres": []}
+        return {
+            "animes": [
+                {"title": "Por favor, ingresa un nombre de usuario válido.", "image_url": None, "type": None, "score": None}
+            ],
+            "genres": [],
+        }
 
     try:
-        # Obtener animes populares
-        response_animes = requests.get("https://api.jikan.moe/v4/top/anime")
-        if response_animes.status_code != 200:
-            return {"animes": [{"title": "Error al obtener animes populares.", "image_url": None}], "genres": []}
-        animes = response_animes.json()
-
         # Obtener datos del usuario desde la API
         response_user = requests.get(f"https://api.jikan.moe/v4/users/{usuario}/full")
         if response_user.status_code != 200:
-            return {"animes": [{"title": f"Error al obtener datos del usuario '{usuario}'.", "image_url": None}], "genres": []}
+            return {
+                "animes": [
+                    {"title": f"Error al obtener datos del usuario '{usuario}'.", "image_url": None, "type": None, "score": None}
+                ],
+                "genres": [],
+            }
 
         # Obtener favoritos del usuario
         favorites_url = f"https://api.jikan.moe/v4/users/{usuario}/favorites"
         response_favorites = requests.get(favorites_url)
         if response_favorites.status_code != 200:
-            return {"animes": [{"title": f"Error al obtener los favoritos del usuario '{usuario}'.", "image_url": None}], "genres": []}
+            return {
+                "animes": [
+                    {"title": f"Error al obtener los favoritos del usuario '{usuario}'.", "image_url": None, "type": None, "score": None}
+                ],
+                "genres": [],
+            }
         favorites = response_favorites.json()
-        favorite_ids = [fav['mal_id'] for fav in favorites['data']['anime']]
+        favorite_ids = [fav["mal_id"] for fav in favorites["data"]["anime"]]
 
         # Buscar géneros de los favoritos del usuario
         user_genres = []
         for fav_id in favorite_ids:
+            time.sleep(1)
             anime_url = f"https://api.jikan.moe/v4/anime/{fav_id}"
             response_anime = requests.get(anime_url)
             if response_anime.status_code == 200:
                 anime_data = response_anime.json()
-                genres = anime_data['data'].get('genres', [])
-                user_genres.extend([genre['name'] for genre in genres])
+                genres = anime_data["data"].get("genres", [])
+                user_genres.extend([genre["name"] for genre in genres])
+
+        # Obtener los primeros 10 amigos del usuario
+        friends_url = f"https://api.jikan.moe/v4/users/{usuario}/friends"
+        response_friends = requests.get(friends_url)
+        friends_genres = []
+        if response_friends.status_code == 200:
+            friends = response_friends.json()
+            user_friends = friends["data"][:10]
+
+            for friend in user_friends:
+                friend_favorites_url = f"https://api.jikan.moe/v4/users/{friend['user']['username']}/favorites"
+                response_friend_favorites = requests.get(friend_favorites_url)
+                if response_friend_favorites.status_code == 200:
+                    friend_favorites = response_friend_favorites.json()
+                    for fav in friend_favorites["data"]["anime"]:
+                        time.sleep(1)
+                        anime_url = f"https://api.jikan.moe/v4/anime/{fav['mal_id']}"
+                        response_anime = requests.get(anime_url)
+                        if response_anime.status_code == 200:
+                            anime_data = response_anime.json()
+                            genres = anime_data["data"].get("genres", [])
+                            friends_genres.extend([genre["name"] for genre in genres])
+
+        # Combinar géneros de usuario y amigos
+        all_genres = user_genres + friends_genres
+        genre_counts = Counter(all_genres)
 
         # Calcular géneros más comunes
-        genre_counts = Counter(user_genres)
         max_frequency = max(genre_counts.values()) if genre_counts else 0
-        relative_threshold = max(1, int(max_frequency * 0.6))
+        relative_threshold = max(1, int(max_frequency * 0.8))
         filtered_genres = [genre for genre, count in genre_counts.items() if count >= relative_threshold]
 
         # Buscar animes populares con géneros comunes
         recommended_animes = []
-        for popular_anime in animes['data']:
-            anime_genres = [genre['name'] for genre in popular_anime.get('genres', [])]
-            if any(genre in filtered_genres for genre in anime_genres):
-                recommended_animes.append({
-                    "title": popular_anime['title'],
-                    "image_url": popular_anime['images']['jpg']['image_url'],
-                    "genres": anime_genres,
-                })
-
-        # Obtener todos los géneros únicos recomendados
-        all_genres = set(genre for anime in recommended_animes for genre in anime['genres'])
+        for page in range(1, 5):
+            response_animes = requests.get(f"https://api.jikan.moe/v4/top/anime?page={page}")
+            if response_animes.status_code == 200:
+                animes = response_animes.json()
+                for popular_anime in animes["data"]:
+                    anime_genres = [genre["name"] for genre in popular_anime.get("genres", [])]
+                    if any(genre in filtered_genres for genre in anime_genres):
+                        recommended_animes.append(
+                            {
+                                "title": popular_anime["title"],
+                                "image_url": popular_anime["images"]["jpg"]["image_url"],
+                                "genres": anime_genres,
+                                "type": popular_anime.get("type"),
+                                "score": popular_anime.get("score"),
+                            }
+                        )
 
         return {
-            "animes": recommended_animes if recommended_animes else [{"title": "No se encontraron recomendaciones.", "image_url": None}],
-            "genres": list(all_genres)
+            "animes": recommended_animes
+            if recommended_animes
+            else [{"title": "No se encontraron recomendaciones.", "image_url": None, "type": None, "score": None}],
+            "genres": filtered_genres,
         }
     except Exception as e:
-        return {"animes": [{"title": f"Error inesperado: {str(e)}", "image_url": None}], "genres": []}
+        return {
+            "animes": [
+                {"title": f"Error inesperado: {str(e)}", "image_url": None, "type": None, "score": None}
+            ],
+            "genres": [],
+        }
+
+
 
 # Componente principal
 @component
@@ -82,7 +132,7 @@ def App():
             resultado = recomendar_animes(usuario)
             set_recomendaciones(resultado)
         else:
-            set_recomendaciones({"animes": [{"title": "Please enter a valid username.", "image_url": None}], "genres": []})
+            set_recomendaciones({"animes": [{"title": "Please enter a valid username.", "image_url": None, "type": None, "score": None}], "genres": []})
 
     return html.div(
         {
@@ -128,7 +178,7 @@ def App():
                 ),
             ),
             # Título de géneros
-            html.h2({"className": "text-2xl text-black mt-5 font-bold"}, "Genres:"),
+            html.h2({"className": "text-2xl text-black mt-5 font-bold"}, "Favorite Genres:"),
             html.div(
                 {"className": "flex flex-wrap justify-start mt-4 space-x-2"},
                 [
@@ -148,10 +198,16 @@ def App():
                 [
                     html.div(
                         {
-                            "className": " bg-gray-200 shadow-lg hover:shadow-xl w-44 h-auto p-3 rounded shadow-md m-2 flex flex-col items-center",
+                            "className": "bg-gray-200 shadow-lg hover:shadow-xl w-44 h-auto p-3 rounded shadow-md m-2 flex flex-col items-center",
                         },
                         html.img({"src": anime["image_url"], "alt": anime["title"], "className": "w-32 h-48 rounded"}) if anime["image_url"] else None,
                         html.p({"className": "mt-2 text-center text-black"}, anime["title"]),
+                        html.p({"className": "mt-2 text-center text-black"}, anime["type"]),
+                        html.div(
+                            {"className": "mt-2 text-center text-black"},
+                            ", ".join(anime.get("genres", [])),  # Manejo de géneros faltantes
+                        ),
+                        html.p({"className": "mt-2 text-center text-black"}, {"✭", anime['score']}),
                     )
                     for anime in recomendaciones["animes"]
                 ],

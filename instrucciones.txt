@@ -4,4 +4,6 @@ pip install "reactpy[starlette]"
 
 .\venv\Scripts\activate
 
+python main.py
+
 desactivate
